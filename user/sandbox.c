@@ -40,7 +40,7 @@ main(int argc, char *argv[])
     printf("%s: exec fork failed\n", argv[0]);
     exit(1);
   }
-  if(pid == 0) {
+  if(pid == 0) { 
     if (interpose(atoi(argv[mask]), argv[mask+1]) < 0) {
       printf("%s: interpose failed", argv[0]);
       exit(1);
@@ -54,3 +54,4 @@ main(int argc, char *argv[])
   
   return 0;
 }
+ 
