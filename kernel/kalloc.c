@@ -8,7 +8,7 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
-
+#define NTOP (PHYSTOP-16*SUPERPGSIZE)
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -22,12 +22,55 @@ struct {
   struct spinlock lock;
   struct run *freelist;
 } kmem;
+struct superrun {
+  struct superrun *next;
+};
 
+struct {
+  struct spinlock lock;
+  struct superrun *freelist;
+} supermem;
+void  superfree(void *pa){
+  struct superrun *r;
+  if(((uint64)pa%SUPERPGSIZE)!=0 || (uint64)pa < NTOP || (uint64)pa>=PHYSTOP){
+    panic("kfree");
+  }
+  memset(pa,1,SUPERPGSIZE);
+  r=(struct superrun *)pa;
+  acquire(&supermem.lock);
+  r->next=supermem.freelist;
+  supermem.freelist=r;
+  release(&supermem.lock);
+}
+void *superalloc(void){
+  struct superrun  *r;
+  acquire(&supermem.lock);
+  r=supermem.freelist;
+  if(r){
+    supermem.freelist=r->next;
+  }
+  release(&supermem.lock);
+  if(r){
+    memset((char*)r,1,SUPERPGSIZE);
+  }
+  return (void*)r;
+}
+void superfreerange(void *pa_start,void *pa_end){
+  char *p=(char*)SUPERPGROUNDUP((uint64)pa_start);
+  for(;p+SUPERPGSIZE<=(char*)pa_end;p+=SUPERPGSIZE){
+    superfree(p);
+  }
+}
+void superinit(){
+  initlock(&supermem.lock, "supermem");
+  superfreerange((void*)NTOP, (void*)PHYSTOP);
+}
 void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
-  freerange(end, (void*)PHYSTOP);
+  freerange(end, (void*)NTOP);
+  superinit();
 }
 
 void
@@ -38,7 +81,6 @@ freerange(void *pa_start, void *pa_end)
   for(; p + PGSIZE <= (char*)pa_end; p += PGSIZE)
     kfree(p);
 }
-
 // Free the page of physical memory pointed at by pa,
 // which normally should have been returned by a
 // call to kalloc().  (The exception is when
@@ -48,7 +90,7 @@ kfree(void *pa)
 {
   struct run *r;
 
-  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
+  if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= NTOP)
     panic("kfree");
 
   // Fill with junk to catch dangling refs.
@@ -80,3 +122,4 @@ kalloc(void)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
 }
+
