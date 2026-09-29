@@ -9,13 +9,13 @@
 
 #define TX_RING_SIZE 16
 static struct tx_desc tx_ring[TX_RING_SIZE] __attribute__((aligned(16)));
-
+static char* tx_buf[TX_RING_SIZE];
 #define RX_RING_SIZE 16
 static struct rx_desc rx_ring[RX_RING_SIZE] __attribute__((aligned(16)));
 
 // remember where the e1000's registers live.
 static volatile uint32 *regs;
-
+static char* rx_buf[RX_RING_SIZE];
 struct spinlock e1000_lock;
 
 // called by pci_init().
@@ -104,8 +104,26 @@ e1000_transmit(char *buf, int len)
   // return -1 on failure (e.g., there is no descriptor available)
   // so that the caller knows to free buf.
   //
+  acquire(&e1000_lock);
+  int ind=regs[E1000_TDT];
+  if((tx_ring[ind].status&E1000_TXD_STAT_DD)==0){
+    release(&e1000_lock);
+    return -1;
+  }
+  if(tx_buf[ind]!=0){
+    kfree(tx_buf[ind]);
+  }
+  tx_ring[ind].addr=(uint64)buf;
+  tx_ring[ind].length=(uint16)len;
+  tx_ring[ind].cso=0;
+  tx_ring[ind].cmd=E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  tx_ring[ind].css=0;
+  tx_ring[ind].status=0;
+  tx_ring[ind].special=0;
+  tx_buf[ind]=buf;
+  regs[E1000_TDT]=(ind+1)%TX_RING_SIZE;
+  release(&e1000_lock);
 
-  
   return 0;
 }
 
@@ -118,7 +136,31 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver a buf for each packet (using net_rx()).
   //
-
+  acquire(&e1000_lock);
+  int ind=(regs[E1000_RDT]+1)%RX_RING_SIZE;
+  char *buf;
+  int len;
+  if((rx_ring[ind].status&E1000_RXD_STAT_DD)==0){
+    release(&e1000_lock);
+    return;
+  }
+  while(rx_ring[ind].status&E1000_RXD_STAT_DD){
+    buf=(char*)rx_ring[ind].addr;
+    len=rx_ring[ind].length;
+    if((rx_buf[ind]=kalloc())==0){
+      release(&e1000_lock);
+      panic("recv err");
+    }
+    rx_ring[ind].addr=(uint64)rx_buf[ind];
+    rx_ring[ind].length=0;
+    rx_ring[ind].status=0;
+    regs[E1000_RDT]=ind;
+    ind=(ind+1)%RX_RING_SIZE;
+    release(&e1000_lock);
+    net_rx(buf,len);
+    acquire(&e1000_lock);
+  }
+  release(&e1000_lock);
 }
 
 void

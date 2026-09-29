@@ -19,6 +19,17 @@ static uint8 host_mac[ETHADDR_LEN] = { 0x52, 0x55, 0x0a, 0x00, 0x02, 0x02 };
 
 static struct spinlock netlock;
 
+struct port{
+  int port;
+  int bound;
+  struct packet pac[16];
+  int head;
+  int tail;
+  int cnt;
+};
+#define PORTSIZE 32
+struct port p[PORTSIZE];
+
 void
 netinit(void)
 {
@@ -37,7 +48,32 @@ sys_bind(void)
   //
   // Your code here.
   //
-
+  int port;
+  argint(0,&port);
+  //printf("bind ac\n");
+  acquire(&netlock);
+  for(int i=0;i<PORTSIZE;i++){
+    if(p[i].port==port&&p[i].bound==1){
+      release(&netlock);
+       //printf("bind re\n");
+      return -1;
+    }
+  }
+  for(int i=0;i<PORTSIZE;i++){
+    if(p[i].bound==0){
+      p[i].port=port;
+      p[i].cnt=0;
+      p[i].head=0;
+      p[i].tail=0;
+      p[i].bound=1;
+      release(&netlock);
+      //printf("bind port %d\n",port);
+       //printf("bind re\n");
+      return 0;
+    }
+  }
+  release(&netlock);
+  //printf("bind re\n");
   return -1;
 }
 
@@ -77,7 +113,61 @@ sys_recv(void)
   //
   // Your code here.
   //
-  return -1;
+  int dport;
+  uint64 src;
+  uint64 sport;
+  uint64 buf;
+  int maxlen;
+  argint(0,&dport);
+  argaddr(1,&src);
+  argaddr(2,&sport);
+  argaddr(3,&buf);
+  argint(4,&maxlen);
+  //printf("recv ac\n");
+  acquire(&netlock);
+  struct port *po;
+  int flag=0;
+  for(int i=0;i<PORTSIZE;i++){
+    if(p[i].bound==1&&p[i].port==dport){
+      po=&p[i];
+      //printf("port number %d\n",i);
+     // printf("recv port %d\n",p[i].port);
+      flag=1;
+      break;
+    }
+  }
+  if(flag==0){
+    release(&netlock);
+    //panic("no bound");
+    return -1;
+  }
+  //printf("begin sleep\n");
+  while(po->cnt==0){
+    sleep(po,&netlock);
+    //printf("sleep\n");
+  }
+  struct packet pt=po->pac[po->head];
+  //int oldhead=po->head;
+  po->head=(po->head+1)%16;
+  struct proc *pr=myproc();
+  po->cnt--;
+  //po->pac[oldhead].buf=0;
+  //po->pac[oldhead].len=0;
+  release(&netlock);
+  //printf("recv re\n");
+  struct eth *e=(struct eth*)pt.buf;
+  struct ip *_ip=(struct ip*)(e+1);
+  struct udp *u=(struct udp*)(_ip+1);
+  char *playload=(char*)(u+1);
+  int len=ntohs(u->ulen)-sizeof(struct udp);
+  if(len>maxlen) len=maxlen;
+  uint16 sp=ntohs(u->sport);
+  uint32 ipsrc=ntohl(_ip->ip_src);
+  copyout(pr->pagetable,src,(void*)(&ipsrc),sizeof(uint32));
+  copyout(pr->pagetable,sport,(void*)(&sp),sizeof(uint16));
+  copyout(pr->pagetable,buf,(void*)playload,len);
+  kfree(pt.buf);
+  return len;
 }
 
 // This code is lifted from FreeBSD's ping.c, and is copyright by the Regents
@@ -191,7 +281,36 @@ ip_rx(char *buf, int len)
   //
   // Your code here.
   //
-  
+  struct eth *e=(struct eth*)buf;
+  struct ip *_ip=(struct ip*)(e+1);
+  struct udp *u=(struct udp*)(_ip+1);
+  //char *playload=(char*)(u+1);
+  if(_ip->ip_p!=IPPROTO_UDP){
+    kfree(buf);
+    return;
+  }
+  //printf("iprx ac\n");
+  acquire(&netlock);
+  int flag=0;
+  for(int i=0;i<PORTSIZE;i++){
+    if(p[i].bound==1&&p[i].port==ntohs(u->dport)){
+      if(p[i].cnt>=16) break;
+      p[i].cnt++;
+      p[i].pac[p[i].tail].buf=buf;
+      p[i].pac[p[i].tail].len=len;
+      p[i].tail=(p[i].tail+1)%16;
+      flag=1;
+    //  printf("rx port number %d\n",i);
+      //printf("rx port %d\n",p[i].port);
+      wakeup(&p[i]);
+      //printf("wakeup\n");
+      break;
+    }
+  }
+  release(&netlock);
+  //printf("iprx re\n");
+  if(flag!=1) kfree(buf);
+  return;
 }
 
 //
