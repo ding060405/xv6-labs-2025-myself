@@ -125,28 +125,56 @@ static void
 read_acquire_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  acquire(&rwlk->l);
+  //acquire(&rwlk->l);
+  for(; ;){
+    while(atomic_read4(&rwlk->writer)||atomic_read4(&rwlk->waiting_writer));
+    __sync_fetch_and_add(&rwlk->readers,1);
+    if(atomic_read4(&rwlk->writer)==0&&atomic_read4(&rwlk->waiting_writer)==0){
+      //rwlk->cpu=mycpu();
+      break;
+    }
+    __sync_fetch_and_sub(&rwlk->readers,1);
+  }
+  __sync_synchronize();
 }
 
 static void
 read_release_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  release(&rwlk->l);
+  //release(&rwlk->l);
+  if(atomic_read4(&rwlk->readers)==0){
+    panic("read_release");
+  }
+  __sync_fetch_and_sub(&rwlk->readers,1);
+  //if(__sync_bool_compare_and_swap(&rwlk->readers,0,0)) rwlk->cpu=0;
+  __sync_synchronize();
 }
 
 static void
 write_acquire_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  acquire(&rwlk->l);
+  //acquire(&rwlk->l);
+  __sync_fetch_and_add(&rwlk->waiting_writer,1);
+  while(__sync_lock_test_and_set(&rwlk->writer, 1) != 0);
+  __sync_fetch_and_sub(&rwlk->waiting_writer,1);
+  while(atomic_read4(&rwlk->readers) != 0);
+  __sync_synchronize();
+  rwlk->cpu=mycpu();
 }
 
 static void
 write_release_inner(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  release(&rwlk->l);
+  //release(&rwlk->l);
+  if(atomic_read4(&rwlk->writer)==0||rwlk->cpu!=mycpu()){
+    panic("write_release");
+  }
+  rwlk->cpu=0;
+  __sync_fetch_and_sub(&rwlk->writer,1);
+   __sync_synchronize();
 }
 
 void
@@ -181,7 +209,12 @@ void
 initrwlock(struct rwspinlock *rwlk)
 {
   // Replace this with your implementation.
-  initlock(&rwlk->l, "rwlk");
+  //initlock(&rwlk->l, "rwlk");
+  snprintf(rwlk->name,5,"rwlk");
+  rwlk->cpu=0;
+  rwlk->writer=0;
+  rwlk->readers=0;
+  rwlk->waiting_writer=0;
 }
 
 // Test rwspinlock implementation.
