@@ -4,7 +4,11 @@
 #include "riscv.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "fs.h"
 #include "defs.h"
+#include  "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -124,7 +128,14 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
-
+  p->mapaddr=MAPBASE;
+  for(int i=0;i<MAXVMA;i++){
+    p->vma[i].addr=0;
+    p->vma[i].used=0;
+    p->vma[i].f=0;
+    p->vma[i].len=0;
+    p->vma[i].perm=0;  
+  }
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -272,7 +283,13 @@ kfork(void)
     return -1;
   }
   np->sz = p->sz;
-
+  for(int i=0;i<MAXVMA;i++){
+    np->vma[i]=p->vma[i];
+    if(p->vma[i].used){
+      filedup(p->vma[i].f);
+    }
+  }
+  np->mapaddr=p->mapaddr;
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -329,6 +346,52 @@ kexit(int status)
     panic("init exiting");
 
   // Close all open files.
+  for(int i=0;i<MAXVMA;i++){
+    if(p->vma[i].used){
+      if(p->vma[i].flags==MAP_SHARED){
+        struct file *f=p->vma[i].f;
+        int n=PGROUNDUP(p->vma[i].len)/PGSIZE;
+        for(int k=0;k<n;k++){
+          uint64 va=p->vma[i].addr+k*PGSIZE;
+          if(ismapped(p->pagetable,va)){
+            uint64 size=p->vma[i].len-k*PGSIZE;
+            uint64 n1=size<PGSIZE?size:PGSIZE;
+            uint64 off=va-p->vma[i].addr+p->vma[i].offset;
+            begin_op();
+            ilock(f->ip);
+            if(f->ip->size<off) {
+              iunlock(f->ip);
+              end_op();
+              continue;
+            }
+            if(f->ip->size-off<n1){
+              n1=f->ip->size-off;
+            }
+            int r=writei(f->ip,1,va,off,n1);
+            iunlock(f->ip);
+            end_op();
+            if(r!=n1) break;
+          }
+        }
+      }
+      int npages=(PGROUNDUP(p->vma[i].len))/PGSIZE;
+      for(int k=0;k<npages;k++){
+        uint64 va=p->vma[i].addr+k*PGSIZE;
+        if(ismapped(p->pagetable,va)){
+          uvmunmap(p->pagetable,va,1,1);
+        }
+      }
+      fileclose(p->vma[i].f);
+      p->vma[i].addr=0;
+      p->vma[i].len=0;
+      p->vma[i].flags=0;
+      p->vma[i].perm=0;
+      p->vma[i].f=0;
+      p->vma[i].used=0;
+      p->vma[i].offset=0;
+      p->vma[i].fd=0;
+    }
+  }
   for(int fd = 0; fd < NOFILE; fd++){
     if(p->ofile[fd]){
       struct file *f = p->ofile[fd];

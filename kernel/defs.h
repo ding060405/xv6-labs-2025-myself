@@ -240,5 +240,4 @@ int             e1000_transmit(char *, int);
 // net.c
 void            netinit(void);
 void            net_rx(char *buf, int len);
-
 #endif

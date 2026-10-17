@@ -503,3 +503,156 @@ sys_pipe(void)
   }
   return 0;
 }
+uint64
+sys_mmap(void){
+  uint64 addr;
+  uint64 len;
+  int prot,flags,fd;
+  uint64 offset;
+  argaddr(0,&addr);
+  if(addr==-1){
+    return -1;
+  }
+  argaddr(1,&len);
+  argint(2,&prot);
+  argint(3,&flags);
+  struct file *f;
+  if(argfd(4,&fd,&f)<0) return -1;
+  if((!f->writable)&&(prot&PROT_WRITE)&&flags==MAP_SHARED) return -1;
+  argaddr(5,&offset);
+  struct proc *p=myproc();
+  //acquire(&tickslock);
+  int flag=0;
+  for(int i=0;i<MAXVMA;i++){
+    if(p->vma[i].used==0){
+      p->vma[i].addr=PGROUNDUP(p->mapaddr);
+      addr=p->vma[i].addr;
+      p->vma[i].len=len;
+      p->vma[i].fd=fd;
+      p->vma[i].perm = 0;
+
+    if(prot != PROT_NONE){
+    p->vma[i].perm |= PTE_U;
+
+    if(prot & PROT_READ)
+        p->vma[i].perm |= PTE_R;
+
+    if(prot & PROT_WRITE)
+        p->vma[i].perm |= PTE_W | PTE_R;
+
+    if(prot & PROT_EXEC)
+        p->vma[i].perm |= PTE_X;
+}
+      p->vma[i].flags=flags;
+      p->vma[i].offset=offset;
+      p->vma[i].ref+=1;
+      p->mapaddr=PGROUNDUP(p->mapaddr)+PGROUNDUP(len);
+      p->vma[i].used=1;
+      p->vma[i].f=f;
+      filedup(f);
+      flag=1;
+      break;
+    }
+  }
+ // release(&tickslock);
+  if(flag==0){
+    return -1;
+  }
+ // pte_t *pte;
+  return addr;
+
+}
+uint64
+sys_munmap(void){
+  uint64 addr,len;
+  argaddr(0,&addr);
+  argaddr(1,&len);
+  struct proc *p=myproc();
+  //acquire(&tickslock);
+  int flag=0;
+  for(int i=0;i<MAXVMA;i++){
+    //int a=(p->vma[i].addr<=addr),b=(PGROUNDUP(p->vma[i].addr)+PGROUNDUP(p->vma[i].len)>=addr),c=(p->vma[i].used==1);
+    //printf("a=%d\n",a);
+    //printf("b=%d\n",b);
+    //printf("c=%d\n",c);
+    if((p->vma[i].addr<=addr&&p->vma[i].addr+p->vma[i].len>=addr+len)&&p->vma[i].used==1){
+     // printf("t\n");
+     if(addr>p->vma[i].addr&&addr+len<p->vma[i].addr+p->vma[i].len) return -1;
+      if(p->vma[i].flags==MAP_SHARED){
+        //struct inode *ip=(p->vma[i].f)->ip;
+        //ilock(ip);
+        //uint64 off=(addr-p->vma[i].addr)+len;
+        //int n=PGROUNDUP(len)-PGROUNDUP(p->vma[i].addr);
+        //filewrite(p->vma[i].f,PGROUNDUP(p->vma[i].addr),n);
+        //printf("share\n");
+        //int n=len;
+        //uint64 off=addr-p->vma[i].addr+p->vma[i].offset;
+        //int j=0;
+        //int max=((MAXOPBLOCKS-1-1-2)/2)*BSIZE;
+        struct file *f=p->vma[i].f;
+        int n=(PGROUNDUP(len))/PGSIZE;
+        //uint64 size=len;
+        for(int k=0;k<n;k++){
+          uint64 va=PGROUNDDOWN(addr)+k*PGSIZE;
+          if(ismapped(p->pagetable,va)){
+            uint64 size=len-k*PGSIZE;
+            uint64 n1=size<PGSIZE?size:PGSIZE;
+            begin_op();
+            ilock(f->ip);
+            int r;
+            uint64 off=va-p->vma[i].addr+p->vma[i].offset;
+            //void *tva=(void*)va;
+            //printf("writeback: va=%p off=%ld r=%d\n",tva, off, r);
+            if(off >= f->ip->size){
+    iunlock(f->ip);
+    continue;
+}
+
+if(f->ip->size - off < n1)
+    n1 = f->ip->size - off;
+
+            r=writei(f->ip,1,PGROUNDDOWN(addr)+k*PGSIZE,off,n1);
+            iunlock(f->ip);
+            end_op();
+            if(r!=n1) break;
+          }
+        }
+      }
+      int npages=(PGROUNDUP(len))/PGSIZE;
+      for(int k=0;k<npages;k++){
+        if(ismapped(p->pagetable,PGROUNDDOWN(addr)+k*PGSIZE)){
+            uvmunmap(p->pagetable,PGROUNDDOWN(addr)+k*PGSIZE,1,1);
+        }
+      }
+      if(addr==p->vma[i].addr&&len==p->vma[i].len){
+        fileclose(p->vma[i].f);
+        p->vma[i].addr=0;
+        p->vma[i].len=0;
+        p->vma[i].offset=0;
+        p->vma[i].perm=0;
+        p->vma[i].flags=0;
+        p->vma[i].used=0;
+      
+      }
+      else if(addr==p->vma[i].addr){
+        p->vma[i].addr+=len;
+        p->vma[i].len-=len;
+        p->vma[i].offset+=len;
+      }
+      else if(addr+len==p->vma[i].addr+p->vma[i].len){
+        p->vma[i].len-=len;
+      }
+      //struct file *f=p->vma[i].f;
+      //acquire()
+      //f->ref--;
+      //fileclose(f);
+      flag=1;
+      break;
+      //p->vma[i].f
+    }
+  }
+  //release(&tickslock);
+  if(flag==0) return -1;
+  return 0;
+}
+

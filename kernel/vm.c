@@ -5,9 +5,10 @@
 #include "riscv.h"
 #include "defs.h"
 #include "spinlock.h"
+#include "sleeplock.h"
 #include "proc.h"
 #include "fs.h"
-
+#include "file.h"
 /*
  * the kernel's page table.
  */
@@ -386,6 +387,7 @@ copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
     va0 = PGROUNDDOWN(srcva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0) {
+      //printf("this\n");
       if((pa0 = vmfault(pagetable, va0, 0)) == 0) {
         return -1;
       }
@@ -454,9 +456,42 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
 {
   uint64 mem;
   struct proc *p = myproc();
-
-  if (va >= p->sz)
-    return 0;
+  if(va>=MAXVA) return 0;
+  if (va >= p->sz){
+    //printf("sz\n");
+    va=PGROUNDDOWN(va);
+    if(ismapped(pagetable,va)) return 0;
+    //printf("map\n");
+    //return 0;
+    for(int i=0;i<MAXVMA;i++){
+    if((p->vma[i].addr<=va&&p->vma[i].addr+p->vma[i].len>va)&&p->vma[i].used==1){
+      if(p->vma[i].f==0){
+        //printf("f\n");
+        return 0;
+      }
+       mem=(uint64)kalloc();
+      if(mem==0) return 0;
+      memset((void*)mem,0,PGSIZE);
+      //printf("test\n");
+      struct inode *ip=(p->vma[i].f)->ip;
+      //printf("fault\n");
+      ilock(ip);
+      int off=va-p->vma[i].addr+p->vma[i].offset;
+     //printf("fault: va=%p off=%d\n", (void*)va, off);
+      readi(ip,0,mem,off,PGSIZE);
+      //printf("read\n");
+      iunlock(ip);
+      //printf("test\n");
+      if(mappages(p->pagetable,va,PGSIZE,mem,p->vma[i].perm)!=0){
+        printf("kfree\n");
+        kfree((void*)mem);
+        return 0;
+      }
+      return mem;
+    }
+  }
+  return 0;
+  }
   va = PGROUNDDOWN(va);
   if(ismapped(pagetable, va)) {
     return 0;
@@ -465,6 +500,7 @@ vmfault(pagetable_t pagetable, uint64 va, int read)
   if(mem == 0)
     return 0;
   memset((void *) mem, 0, PGSIZE);
+  //int flag=0;
   if (mappages(p->pagetable, va, PGSIZE, mem, PTE_W|PTE_U|PTE_R) != 0) {
     kfree((void *)mem);
     return 0;

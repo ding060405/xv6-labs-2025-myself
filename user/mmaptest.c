@@ -258,6 +258,7 @@ mmap_test(void)
   if(write(fd1, "12345", 5) != 5)
     err("write (1)");
   char *p1 = mmap(0, PGSIZE, PROT_READ, MAP_PRIVATE, fd1, 0);
+  //printf("p1\n");
   if(p1 == MAP_FAILED)
     err("mmap (5)");
   if (close(fd1) == -1)
@@ -270,7 +271,9 @@ mmap_test(void)
     err("open (6)");
   if(write(fd2, "67890", 5) != 5)
     err("write (2)");
+  //printf("p2\n");
   char *p2 = mmap(0, PGSIZE, PROT_READ, MAP_PRIVATE, fd2, 0);
+  //printf("p2 end\n");
   if(p2 == MAP_FAILED)
     err("mmap (6)");
   if (close(fd2) == -1)
